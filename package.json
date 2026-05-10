@@ -1,0 +1,43 @@
+{
+  "name": "@tailsec/scan-terraform",
+  "version": "0.1.0",
+  "description": "Security scanner for Terraform IaC",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "tailsec-scan-terraform": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tailsec-com/scan-terraform"
+  },
+  "keywords": [
+    "security",
+    "terraform",
+    "iac",
+    "scanner"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/preset-env": "^7.29.5",
+    "@babel/preset-typescript": "^7.28.5",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "babel-jest": "^29.7.0",
+    "glob": "^10.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.9",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}
