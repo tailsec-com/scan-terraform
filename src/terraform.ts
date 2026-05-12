@@ -117,9 +117,9 @@ export function scanTerraform(content: string): TerraformFinding[] {
           ruleId,
           type: 'terraform',
           severity: rule.severity,
-          title: rule.title,
+          title: ruleId.replace(/-/g, ' ').replace(/tf [a-z]+ /i, ''),
           resource: `${res.type}.${res.name}`,
-          advice: rule.advice,
+          advice: [`Review and fix ${ruleId} security issue`],
         });
       }
     }
@@ -132,10 +132,10 @@ export function scanTerraform(content: string): TerraformFinding[] {
         ruleId,
         type: 'terraform',
         severity: rule.severity,
-        title: rule.title,
+        title: ruleId.replace(/-/g, ' ').replace(/tf [a-z]+ /i, ''),
         resource: 'variables',
         line: lineMatch.length,
-        advice: rule.advice,
+        advice: [`Review and fix ${ruleId} security issue`],
       });
     }
   }
