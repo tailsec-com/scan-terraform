@@ -4,6 +4,7 @@ export interface TerraformFinding {
   ruleId: string;
   type: string;
   severity: string;
+  title: string;
   resource: string;
   line?: number;
   advice: string[];
