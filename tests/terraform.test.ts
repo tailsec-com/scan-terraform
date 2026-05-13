@@ -341,6 +341,86 @@ resource "aws_instance" "example" {
     });
   });
 
+  describe('AWS EMR', () => {
+    it('finds tf-aws-emr-local-inbound', () => {
+      const tf = `
+resource "aws_emr_cluster" "example" {
+  name               = "example-cluster"
+  release_label      = "emr-6.0.0"
+  service_role       = aws_iam_role.example.name
+  local_outbound_security_group = aws_security_group.example.id
+}
+`;
+      const findings = scanTerraform(tf);
+      expect(findings.some(f => f.ruleId === 'tf-aws-emr-local-inbound')).toBe(true);
+    });
+  });
+
+  describe('AWS Redshift encryption', () => {
+    it('finds tf-aws-redshift-unencrypted', () => {
+      const tf = `
+resource "aws_redshift_cluster" "example" {
+  cluster_identifier = "example-cluster"
+  database_name      = "mydb"
+  master_username    = "admin"
+  master_password    = "password123"
+  node_type          = "dc1.large"
+  encrypted          = false
+}
+`;
+      const findings = scanTerraform(tf);
+      expect(findings.some(f => f.ruleId === 'tf-aws-redshift-unencrypted')).toBe(true);
+    });
+  });
+
+  describe('AWS DocumentDB encryption', () => {
+    it('finds tf-aws-documentdb-unencrypted', () => {
+      const tf = `
+resource "aws_docdb_cluster" "example" {
+  cluster_identifier        = "example-cluster"
+  engine                  = "docdb"
+  master_username         = "admin"
+  master_password         = "password123"
+  storage_encrypted       = false
+}
+`;
+      const findings = scanTerraform(tf);
+      expect(findings.some(f => f.ruleId === 'tf-aws-documentdb-unencrypted')).toBe(true);
+    });
+  });
+
+  describe('AWS MSK encryption', () => {
+    it('finds tf-aws-msk-unencrypted', () => {
+      const tf = `
+resource "aws_msk_cluster" "example" {
+  cluster_name           = "example-cluster"
+  kafka_version          = "2.8.0"
+  number_of_broker_nodes = 3
+  encryption_at_rest_kms_key_id = null
+}
+`;
+      const findings = scanTerraform(tf);
+      expect(findings.some(f => f.ruleId === 'tf-aws-msk-unencrypted')).toBe(true);
+    });
+  });
+
+  describe('AWS AppMesh TLS', () => {
+    it('finds tf-aws-appmesh-missing-tls', () => {
+      const tf = `
+resource "aws_appmesh_mesh" "example" {
+  name = "example-mesh"
+  spec {
+    tls {
+      enforced = false
+    }
+  }
+}
+`;
+      const findings = scanTerraform(tf);
+      expect(findings.some(f => f.ruleId === 'tf-aws-appmesh-missing-tls')).toBe(true);
+    });
+  });
+
   describe('Multiple findings', () => {
     it('finds multiple findings of different severity', () => {
       const tf = `

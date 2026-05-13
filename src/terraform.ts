@@ -1,4 +1,16 @@
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+export function isBinaryFile(content: Buffer): boolean {
+  if (content.length === 0) return true;
+  if (content.length < 4) return false;
+  const checkLen = Math.min(content.length, 8192);
+  for (let i = 0; i < checkLen; i++) {
+    if (content[i] === 0) return true;
+  }
+  return false;
+}
 
 export interface TerraformFinding {
   ruleId: string;
@@ -15,28 +27,33 @@ type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 const RESOURCE_BLOCK_RE = /resource\s+"([^"]+)"\s+"([^"]+)"\s*\{([\s\S]*?)\n\}/g;
 const DATA_BLOCK_RE = /data\s+"([^"]+)"\s+"([^"]+)"\s*\{([\s\S]*?)\n\}/g;
 
-const RULE_PATTERNS: Array<[string, RegExp, Severity]> = [
-  ['tf-aws-s3-public-read', /acl\s*=\s*["']public-read["']/, 'high'],
-  ['tf-aws-s3-public-read-write', /acl\s*=\s*["']public-read-write["']/, 'critical'],
-  ['tf-aws-s3-no-versioning', /versioning\s*\{\s*enabled\s*=\s*false?\s*\}/, 'medium'],
-  ['tf-aws-s3-no-encryption', /server_side_encryption_configuration\s*=\s*null|sse\s*=\s*false/, 'high'],
-  ['tf-aws-s3-logging-missing', /logging\s*\{\s*target_bucket\s*=\s*["']?[^"']+["']?\s*\}/, 'low'],
-  ['tf-aws-db-public', /publicly_accessible\s*=\s*true/, 'critical'],
-  ['tf-aws-db-no-encryption', /storage_encrypted\s*=\s*false/, 'high'],
-  ['tf-aws-rds-storage-encrypted', /resource\s+"aws_db_instance"[^}]*storage_encrypted\s*=\s*false/, 'high'],
-  ['tf-aws-db-no-backup', /backup_retention_period\s*=\s*0/, 'medium'],
-  ['tf-aws-elb-no-ssl', /ssl\s*=\s*false|protocol\s*=\s*["']HTTP["']/, 'high'],
-  ['tf-aws-security-group-allow-all', /cidr_blocks\s*=\s*\[\s*["']0\.0\.0\.0\/0["']\s*\][^}]*from_port\s*=\s*0|from_port\s*=\s*0[^}]*cidr_blocks\s*=\s*\[\s*["']0\.0\.0\.0\/0["']/, 'critical'],
-  ['tf-aws-security-group-ssh-all', /from_port\s*=\s*22[^}]*cidr_blocks\s*=\s*\[\s*["']0\.0\.0\.0\/0["']/, 'high'],
-  ['tf-aws-iam-admin', /Action\s*=\s*"\*"[^}]*Resource\s*=\s*"\*"|"Action"\s*:\s*"\*"[^}]*"Resource"\s*:\s*"\*"/, 'critical'],
-  ['tf-aws-iam-*', /"Action"\s*:\s*"service:\*"/, 'high'],
-  ['tf-aws-iam-user-admin-access', /resource\s+"aws_iam_user_policy"[^}]*"AdministratorAccess"/, 'critical'],
-  ['tf-aws-ec2-key-pair', /key_name\s*=\s*["'][^"']+["']/, 'low'],
-  ['tf-aws-ami-public', /ami\s*=\s*["']ami-[0-9a-f]{17}["']/, 'high'],
-  ['tf-aws-sqs-dlq', /redrive_policy\s*=\s*null/, 'medium'],
-  ['tf-aws-elasticache-public', /resource\s+"aws_elasticache_cluster"[^}]*publicly_accessible\s*=\s*true/, 'critical'],
-  ['tf-aws-redshift-public', /resource\s+"aws_redshift_cluster"[^}]*publicly_accessible\s*=\s*true/, 'critical'],
-  ['tf-aws-mq-public', /resource\s+"aws_mq_broker"[^}]*publicly_accessible\s*=\s*true/, 'critical'],
+const RULE_MAP: Array<[string, RegExp, Severity, string, string[]]> = [
+  ['tf-aws-s3-public-read', /acl\s*=\s*["']public-read["']/, 'high', 'S3 bucket is public-read', ['Make bucket private or use proper ACLs']],
+  ['tf-aws-s3-public-read-write', /acl\s*=\s*["']public-read-write["']/, 'critical', 'S3 bucket allows public read-write', ['Restrict bucket access immediately']],
+  ['tf-aws-s3-no-versioning', /versioning\s*\{\s*enabled\s*=\s*false?\s*\}/, 'medium', 'S3 bucket has versioning disabled', ['Enable versioning for backup and recovery']],
+  ['tf-aws-s3-no-encryption', /server_side_encryption_configuration\s*=\s*null|sse\s*=\s*false/, 'high', 'S3 bucket lacks encryption at rest', ['Enable server-side encryption']],
+  ['tf-aws-s3-logging-missing', /logging\s*\{\s*target_bucket\s*=\s*["']?[^"']+["']?\s*\}/, 'low', 'S3 bucket has no access logging', ['Enable server access logging']],
+  ['tf-aws-db-public', /publicly_accessible\s*=\s*true/, 'critical', 'Database is publicly accessible', ['Restrict database to private network']],
+  ['tf-aws-db-no-encryption', /storage_encrypted\s*=\s*false/, 'high', 'Database storage is unencrypted', ['Enable storage encryption']],
+  ['tf-aws-rds-storage-encrypted', /resource\s+"aws_db_instance"[^}]*storage_encrypted\s*=\s*false/, 'high', 'RDS instance storage is unencrypted', ['Enable storage encryption']],
+  ['tf-aws-db-no-backup', /backup_retention_period\s*=\s*0/, 'medium', 'Database has no backup retention', ['Set backup_retention_period > 0']],
+  ['tf-aws-elb-no-ssl', /ssl\s*=\s*false|protocol\s*=\s*["']HTTP["']/, 'high', 'ELB is not using SSL/TLS', ['Configure SSL certificate on ELB']],
+  ['tf-aws-security-group-allow-all', /cidr_blocks\s*=\s*\[\s*["']0\.0\.0\.0\/0["']\s*\][^}]*from_port\s*=\s*0|from_port\s*=\s*0[^}]*cidr_blocks\s*=\s*\[\s*["']0\.0\.0\.0\/0["']/, 'critical', 'Security group allows all traffic from internet', ['Restrict to specific IP ranges']],
+  ['tf-aws-security-group-ssh-all', /from_port\s*=\s*22[^}]*cidr_blocks\s*=\s*\[\s*["']0\.0\.0\.0\/0["']/, 'high', 'SSH open to all internet', ['Restrict SSH access to known IPs']],
+  ['tf-aws-iam-admin', /Action\s*=\s*"\*"[^}]*Resource\s*=\s*"\*"|"Action"\s*:\s*"\*"[^}]*"Resource"\s*:\s*"\*"/, 'critical', 'IAM policy grants full admin access', ['Use least-privilege principle']],
+  ['tf-aws-iam-*', /"Action"\s*:\s*"service:\*"/, 'high', 'IAM policy uses service wildcard', ['Specify exact service actions']],
+  ['tf-aws-iam-user-admin-access', /resource\s+"aws_iam_user_policy"[^}]*"AdministratorAccess"/, 'critical', 'IAM user has AdministratorAccess policy', ['Use scoped-down policies']],
+  ['tf-aws-ec2-key-pair', /key_name\s*=\s*["'][^"']+["']/, 'low', 'EC2 instance has SSH key assigned', ['Ensure key rotation policy exists']],
+  ['tf-aws-ami-public', /ami\s*=\s*["']ami-[0-9a-f]{17}["']/, 'high', 'Using public AMI', ['Use private AMIs or AWS marketplace']],
+  ['tf-aws-sqs-dlq', /redrive_policy\s*=\s*null/, 'medium', 'SQS queue has no dead-letter queue', ['Configure redrive_policy with DLQ']],
+  ['tf-aws-elasticache-public', /resource\s+"aws_elasticache_cluster"[^}]*publicly_accessible\s*=\s*true/, 'critical', 'ElastiCache cluster is publicly accessible', ['Restrict to private network']],
+  ['tf-aws-redshift-public', /resource\s+"aws_redshift_cluster"[^}]*publicly_accessible\s*=\s*true/, 'critical', 'Redshift cluster is publicly accessible', ['Restrict to private network']],
+  ['tf-aws-mq-public', /resource\s+"aws_mq_broker"[^}]*publicly_accessible\s*=\s*true/, 'critical', 'MQ broker is publicly accessible', ['Restrict to private network']],
+  ['tf-aws-emr-local-inbound', /resource\s+"aws_emr_cluster"[^}]*local_outbound_security_group/, 'high', 'EMR cluster has local inbound ports exposed', ['Restrict EMR security group rules']],
+  ['tf-aws-redshift-unencrypted', /resource\s+"aws_redshift_cluster"[^}]*encrypted\s*=\s*false/, 'high', 'Redshift cluster is unencrypted', ['Enable encryption at rest']],
+  ['tf-aws-documentdb-unencrypted', /resource\s+"aws_docdb_cluster"[^}]*storage_encrypted\s*=\s*false/, 'high', 'DocumentDB cluster is unencrypted', ['Enable storage encryption']],
+  ['tf-aws-msk-unencrypted', /resource\s+"aws_msk_cluster"[^}]*encryption_at_rest_kms_key_id\s*=\s*null/, 'high', 'MSK cluster lacks encryption at rest', ['Enable encryption at rest with KMS key']],
+  ['tf-aws-appmesh-missing-tls', /resource\s+"aws_appmesh_mesh"[^}]*tls\s*\{[^}]*enforced\s*=\s*false/, 'high', 'AppMesh mesh has TLS enforcement disabled', ['Enable mutual TLS authentication']],
 ];
 
 const AZURE_PATTERNS: Array<[string, RegExp, Severity]> = [
@@ -60,8 +77,8 @@ const SECRETS_PATTERNS: Array<[string, RegExp, Severity]> = [
   ['tf-secret-variable', /variable\s+"[^"]+"\s*\{[^}]*\}/, 'medium'],
 ];
 
-const PROVIDER_RULES = new Map<string, { severity: Severity; pattern: RegExp }>(
-  RULE_PATTERNS.map(([k, r, s]) => [k, { severity: s, pattern: r }])
+const PROVIDER_RULES = new Map<string, { severity: Severity; pattern: RegExp; title: string; advice: string[] }>(
+  RULE_MAP.map(([k, r, s, t, a]) => [k, { severity: s, pattern: r, title: t, advice: a }])
 );
 const AZURE_RULES = new Map<string, { severity: Severity; pattern: RegExp }>(
   AZURE_PATTERNS.map(([k, r, s]) => [k, { severity: s, pattern: r }])
@@ -72,16 +89,6 @@ const GCP_RULES = new Map<string, { severity: Severity; pattern: RegExp }>(
 const SECRETS_RULES = new Map<string, { severity: Severity; pattern: RegExp }>(
   SECRETS_PATTERNS.map(([k, r, s]) => [k, { severity: s, pattern: r }])
 );
-
-function scanExpression(expr: string, rules: Map<string, { severity: Severity; title: string; advice: string[]; pattern: RegExp }>): Array<{ ruleId: string; severity: Severity; title: string; advice: string[] }> {
-  const matches: Array<{ ruleId: string; severity: Severity; title: string; advice: string[] }> = [];
-  for (const [ruleId, rule] of rules) {
-    if (rule.pattern.test(expr)) {
-      matches.push({ ruleId, severity: rule.severity, title: rule.title, advice: rule.advice });
-    }
-  }
-  return matches;
-}
 
 function parseSimpleTerraform(content: string): Array<{ resource: string; type: string; name: string; body: string }> {
   const resources: Array<{ resource: string; type: string; name: string; body: string }> = [];
@@ -117,9 +124,9 @@ export function scanTerraform(content: string): TerraformFinding[] {
           ruleId,
           type: 'terraform',
           severity: rule.severity,
-          title: ruleId.replace(/-/g, ' ').replace(/tf [a-z]+ /i, ''),
+          title: 'title' in rule ? rule.title : ruleId.replace(/-/g, ' ').replace(/tf [a-z]+ /i, ''),
           resource: `${res.type}.${res.name}`,
-          advice: [`Review and fix ${ruleId} security issue`],
+          advice: 'advice' in rule ? rule.advice : [`Review and fix ${ruleId} security issue`],
         });
       }
     }
